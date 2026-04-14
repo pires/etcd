@@ -688,10 +688,12 @@ func (info TLSInfo) ServerConfig() (*tls.Config, error) {
 		}
 		cfg.ClientCAs = cp
 	}
-	info.applyDynamicServerTrustRoots(cfg)
-
 	// "h2" NextProtos is necessary for enabling HTTP2 for go's HTTP server
 	cfg.NextProtos = []string{"h2"}
+
+	// Dynamic trust roots wrap the fully configured tls.Config via
+	// GetConfigForClient, so apply this after all other mutations above.
+	info.applyDynamicServerTrustRoots(cfg)
 
 	return cfg, nil
 }
