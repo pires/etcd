@@ -259,6 +259,36 @@ func TestDynamicRootCAs_PreservesHostnameVerification(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestDynamicRootCAs_StripsPortFromFallbackServerName(t *testing.T) {
+	serverCA, err := createSelfCertEx(t, "127.0.0.1")
+	require.NoError(t, err)
+
+	serverInfo := &TLSInfo{
+		CertFile: serverCA.CertFile,
+		KeyFile:  serverCA.KeyFile,
+		Logger:   zaptest.NewLogger(t),
+	}
+
+	ln := mustNewTLSListener(t, serverInfo)
+	defer ln.Close()
+
+	provider := newMutableCertPoolProvider(mustCertPoolFromFile(t, serverCA.CertFile))
+	clientInfo := TLSInfo{ServerName: "127.0.0.1"}
+	clientInfo.SetDynamicTrustRoots(provider)
+
+	clientCfg, err := clientInfo.ClientConfig()
+	require.NoError(t, err)
+
+	clientConn := mustDialTLS(t, ln.Addr().String(), clientCfg)
+	defer clientConn.Close()
+	serverConn := mustAcceptConn(t, ln)
+	defer serverConn.Close()
+
+	cs := clientConn.ConnectionState()
+	cs.ServerName = ""
+	require.NoError(t, clientInfo.verifyDynamicServerCertificate(cs, "127.0.0.1:2379"))
+}
+
 func TestDynamicRootCAs_NilProviderPoolFailsHandshake(t *testing.T) {
 	serverCA, err := createSelfCertEx(t, "127.0.0.1")
 	require.NoError(t, err)

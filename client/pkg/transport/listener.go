@@ -633,6 +633,9 @@ func (info TLSInfo) verifyDynamicServerCertificate(cs tls.ConnectionState, fallb
 	if serverName == "" {
 		return errors.New("tls: either ServerName or InsecureSkipVerify must be specified in the tls.Config")
 	}
+	if host, _, err := net.SplitHostPort(serverName); err == nil && host != "" {
+		serverName = host
+	}
 
 	roots := info.currentTrustRoots()
 	if roots == nil {
