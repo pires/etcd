@@ -51,6 +51,25 @@ func (p *mutableCertPoolProvider) SetCertPool(certPool *x509.CertPool) {
 	p.certPool = certPool
 }
 
+func TestServerConfig_DynamicRootCAsPreservesHTTP2ALPN(t *testing.T) {
+	serverTLSInfo, err := createSelfCert(t)
+	require.NoError(t, err)
+
+	serverTLSInfo.ClientCertAuth = true
+	serverTLSInfo.Logger = zaptest.NewLogger(t)
+	serverTLSInfo.SetDynamicTrustRoots(newMutableCertPoolProvider(x509.NewCertPool()))
+
+	cfg, err := serverTLSInfo.ServerConfig()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.GetConfigForClient)
+	require.Contains(t, cfg.NextProtos, "h2")
+
+	helloCfg, err := cfg.GetConfigForClient(&tls.ClientHelloInfo{})
+	require.NoError(t, err)
+	require.NotNil(t, helloCfg)
+	require.Contains(t, helloCfg.NextProtos, "h2")
+}
+
 func TestServerConfig_DynamicRootCAsAcceptsNewClientCAOnNewHandshake(t *testing.T) {
 	serverTLSInfo, err := createSelfCert(t)
 	require.NoError(t, err)
