@@ -402,9 +402,9 @@ func (info TLSInfo) baseConfig() (*tls.Config, error) {
 		return nil, fmt.Errorf("ClientKeyFile and ClientCertFile must both be present or both absent: key: %v, cert: %v]", info.ClientKeyFile, info.ClientCertFile)
 	}
 	if info.ClientCertFile != "" {
-		_, err := tlsutil.NewCert(info.ClientCertFile, info.ClientKeyFile, info.parseFunc)
-		if err != nil {
-			return nil, err
+		_, clientCertErr := tlsutil.NewCert(info.ClientCertFile, info.ClientKeyFile, info.parseFunc)
+		if clientCertErr != nil {
+			return nil, clientCertErr
 		}
 	}
 
