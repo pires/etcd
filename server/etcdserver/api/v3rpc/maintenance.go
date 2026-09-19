@@ -74,6 +74,12 @@ type ConfigGetter interface {
 	Config() config.ServerConfig
 }
 
+// CallAttacher admits a synchronous call into the server lifetime, see
+// etcdserver.EtcdServer.AttachCall.
+type CallAttacher interface {
+	AttachCall(ctx context.Context) (context.Context, func(), error)
+}
+
 type maintenanceServer struct {
 	lg     *zap.Logger
 	rg     apply.RaftStatusGetter
@@ -87,6 +93,7 @@ type maintenanceServer struct {
 	d      Downgrader
 	vs     serverversion.Server
 	cg     ConfigGetter
+	ca     CallAttacher
 
 	healthNotifier notifier
 
@@ -109,6 +116,7 @@ func NewMaintenanceServer(s *etcdserver.EtcdServer, healthNotifier notifier) pb.
 		vs:             etcdserver.NewServerVersionAdapter(s),
 		healthNotifier: healthNotifier,
 		cg:             s,
+		ca:             s,
 	}
 	if srv.lg == nil {
 		srv.lg = zap.NewNop()
@@ -258,7 +266,20 @@ func (ms *maintenanceServer) Alarm(ctx context.Context, ar *pb.AlarmRequest) (*p
 	return resp, nil
 }
 
+// Status attaches the call to the server lifetime, so the backend it reads
+// stays open until it returns, and refuses it once the server has begun
+// stopping.
 func (ms *maintenanceServer) Status(ctx context.Context, ar *pb.StatusRequest) (*pb.StatusResponse, error) {
+	_, detach, err := ms.ca.AttachCall(ctx)
+	if err != nil {
+		return nil, togRPCError(err)
+	}
+	defer detach()
+	return ms.status(), nil
+}
+
+// status builds the Status response. The caller must hold an attached call.
+func (ms *maintenanceServer) status() *pb.StatusResponse {
 	hdr := &pb.ResponseHeader{}
 	ms.hdr.fill(hdr)
 	resp := &pb.StatusResponse{
@@ -292,7 +313,7 @@ func (ms *maintenanceServer) Status(ctx context.Context, ar *pb.StatusRequest) (
 	for _, a := range ms.a.Alarms() {
 		resp.Errors = append(resp.Errors, a.String())
 	}
-	return resp, nil
+	return resp
 }
 
 func (ms *maintenanceServer) MoveLeader(ctx context.Context, tr *pb.MoveLeaderRequest) (*pb.MoveLeaderResponse, error) {
@@ -366,12 +387,24 @@ func (ams *authMaintenanceServer) Alarm(ctx context.Context, ar *pb.AlarmRequest
 	return ams.maintenanceServer.Alarm(ctx, ar)
 }
 
+// Status attaches the call to the server lifetime before authentication, which
+// reads the auth store that shutdown closes, so the whole call runs while the
+// server state it reads stays open.
 func (ams *authMaintenanceServer) Status(ctx context.Context, ar *pb.StatusRequest) (*pb.StatusResponse, error) {
+	ctx, detach, err := ams.ca.AttachCall(ctx)
+	if err != nil {
+		return nil, togRPCError(err)
+	}
+	defer detach()
+
 	if err := ams.requireAuthInfo(ctx); err != nil {
+		if cause := context.Cause(ctx); errorspkg.Is(cause, errors.ErrStopped) {
+			err = cause
+		}
 		return nil, togRPCError(err)
 	}
 
-	return ams.maintenanceServer.Status(ctx, ar)
+	return ams.maintenanceServer.status(), nil
 }
 
 func (ams *authMaintenanceServer) MoveLeader(ctx context.Context, tr *pb.MoveLeaderRequest) (*pb.MoveLeaderResponse, error) {

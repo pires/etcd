@@ -782,12 +782,19 @@ func ValidateClusterAndAssignIDs(lg *zap.Logger, local *RaftCluster, existing *R
 	return nil
 }
 
-// IsLocalMemberLearner returns if the local member is raft learner
+// IsLocalMemberLearner returns if the local member is raft learner.
+// A removed local member is not a raft learner. The server keeps serving
+// requests after the removal of the local member is applied and before it
+// stops, so a removed local member returns false. A local ID that is neither
+// a member nor removed means the membership is inconsistent, and it panics.
 func (c *RaftCluster) IsLocalMemberLearner() bool {
 	c.Lock()
 	defer c.Unlock()
 	localMember, ok := c.members[c.localID]
 	if !ok {
+		if c.removed[c.localID] {
+			return false
+		}
 		c.lg.Panic(
 			"failed to find local ID in cluster members",
 			zap.String("cluster-id", c.cid.String()),
