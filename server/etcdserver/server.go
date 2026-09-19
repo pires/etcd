@@ -2429,6 +2429,36 @@ func (s *EtcdServer) GoAttach(f func()) {
 	}()
 }
 
+// AttachCall admits a synchronous call that uses server state released on
+// shutdown, such as the backend, into the lifetime that GoAttach tracks.
+// It returns ErrStopped once the server has begun stopping. Otherwise shutdown
+// waits for the call to detach before it stops raft and closes the backend,
+// so the caller must call detach after its last use of that state, exactly
+// once: detach is not idempotent. The returned context is canceled with cause
+// ErrStopped when shutdown begins, so a call that waits on it cannot hold
+// shutdown up. The call registers that cancellation rather than running a
+// goroutine of its own; the registration runs only if shutdown cancels it.
+func (s *EtcdServer) AttachCall(ctx context.Context) (context.Context, func(), error) {
+	s.wgMu.RLock() // this blocks with ongoing close(s.stopping)
+	defer s.wgMu.RUnlock()
+	select {
+	case <-s.stopping:
+		return nil, nil, errors.ErrStopped
+	default:
+	}
+
+	// now safe to add since waitgroup wait has not started yet
+	s.wg.Add(1)
+	ctx, cancel := context.WithCancelCause(ctx)
+	stopCancel := context.AfterFunc(s.ctx, func() { cancel(errors.ErrStopped) })
+	detach := func() {
+		stopCancel()
+		cancel(nil)
+		s.wg.Done()
+	}
+	return ctx, detach, nil
+}
+
 func (s *EtcdServer) Alarms() []*pb.AlarmMember {
 	return s.alarmStore.Get(pb.AlarmType_NONE)
 }
