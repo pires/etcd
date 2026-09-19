@@ -49,6 +49,32 @@ func TestAddRemoveMember(t *testing.T) {
 	assert.False(t, c2.IsIDRemoved(19))
 }
 
+// TestIsLocalMemberLearnerRecoveredRemoval covers a local member whose removal
+// is loaded from the backend, as happens when a snapshot that carries the
+// removal is applied or when a removed member restarts.
+func TestIsLocalMemberLearnerRecoveredRemoval(t *testing.T) {
+	c := newTestCluster(t, nil)
+	be := newMembershipBackend()
+	c.SetBackend(be)
+	c.AddMember(newTestMember(1, nil, "node1", nil), true)
+	c.AddMember(newTestMember(2, nil, "node2", nil), true)
+	c.RemoveMember(1, true)
+
+	// Recover from backend
+	c2 := newTestCluster(t, nil)
+	c2.SetID(types.ID(1), types.ID(0xc1))
+	c2.SetBackend(be)
+	c2.Recover(func(*zap.Logger, *semver.Version) {})
+	assert.True(t, c2.IsIDRemoved(1))
+	assert.False(t, c2.IsMemberExist(1))
+
+	var isLearner bool
+	assert.NotPanics(t, func() {
+		isLearner = c2.IsLocalMemberLearner()
+	})
+	assert.False(t, isLearner)
+}
+
 type backendMock struct {
 	members       map[types.ID]*Member
 	removed       map[types.ID]bool

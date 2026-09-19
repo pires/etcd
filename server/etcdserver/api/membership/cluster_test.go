@@ -584,6 +584,90 @@ func TestClusterRemoveMember(t *testing.T) {
 	})
 }
 
+// TestIsLocalMemberLearner covers a present, a removed and an unknown local
+// member ID. A removed local member ID is the state the server serves from
+// after the removal of the local member is applied and before it stops.
+func TestIsLocalMemberLearner(t *testing.T) {
+	tests := []struct {
+		name      string
+		members   []*Member
+		localID   types.ID
+		removeIDs []types.ID
+		want      bool
+		wantPanic bool
+	}{
+		{
+			name:    "local member is a voter",
+			members: []*Member{newTestMember(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID: 1,
+			want:    false,
+		},
+		{
+			name:    "local member is a learner",
+			members: []*Member{newTestMemberAsLearner(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID: 1,
+			want:    true,
+		},
+		{
+			name:      "local member is a learner and another member is removed",
+			members:   []*Member{newTestMemberAsLearner(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID:   1,
+			removeIDs: []types.ID{2},
+			want:      true,
+		},
+		{
+			name:      "local voter is removed",
+			members:   []*Member{newTestMember(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID:   1,
+			removeIDs: []types.ID{1},
+			want:      false,
+		},
+		{
+			name:      "local learner is removed",
+			members:   []*Member{newTestMemberAsLearner(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID:   1,
+			removeIDs: []types.ID{1},
+			want:      false,
+		},
+		{
+			name:      "local ID is neither a member nor removed",
+			members:   []*Member{newTestMember(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID:   3,
+			wantPanic: true,
+		},
+		{
+			name:      "local ID is neither a member nor removed and another member is removed",
+			members:   []*Member{newTestMember(1, nil, "1", nil), newTestMember(2, nil, "2", nil)},
+			localID:   3,
+			removeIDs: []types.ID{2},
+			wantPanic: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestCluster(t, tt.members)
+			c.SetID(tt.localID, types.ID(0xc1))
+			for _, id := range tt.removeIDs {
+				c.RemoveMember(id, true)
+				require.True(t, c.IsIDRemoved(id))
+				require.False(t, c.IsMemberExist(id))
+			}
+
+			if tt.wantPanic {
+				require.PanicsWithValue(t, "failed to find local ID in cluster members", func() {
+					c.IsLocalMemberLearner()
+				})
+				return
+			}
+			var got bool
+			require.NotPanics(t, func() {
+				got = c.IsLocalMemberLearner()
+			})
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestClusterUpdateAttributes(t *testing.T) {
 	name := "etcd"
 	clientURLs := []string{"http://127.0.0.1:4001"}
