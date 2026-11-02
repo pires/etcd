@@ -16,12 +16,15 @@ package embed
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -631,6 +634,11 @@ func TestLogRotation(t *testing.T) {
 		logRotationConfig string
 		wantErr           bool
 		wantErrMsg        error
+		// wantTypeError asserts the rejection by the production "invalid log
+		// rotation config: " prefix and the wrapped *json.UnmarshalTypeError (a
+		// bool value for an int field) instead of by the whole message, since
+		// encoding/json's message text varies by toolchain.
+		wantTypeError bool
 	}{
 		{
 			name:              "mixed log output targets",
@@ -672,7 +680,7 @@ func TestLogRotation(t *testing.T) {
 			logOutputs:        []string{"/tmp/path"},
 			logRotationConfig: `{"maxsize": true}`,
 			wantErr:           true,
-			wantErrMsg:        errors.New("invalid log rotation config: json: cannot unmarshal bool into Go struct field logRotationConfig.Logger.maxsize of type int"),
+			wantTypeError:     true,
 		},
 		{
 			name:              "improperly formatted logger config",
@@ -693,7 +701,18 @@ func TestLogRotation(t *testing.T) {
 			if err != nil && !tt.wantErr {
 				t.Errorf("test %q, unexpected error %v", tt.name, err)
 			}
-			if err != nil && tt.wantErr && tt.wantErrMsg.Error() != err.Error() {
+			if err != nil && tt.wantTypeError {
+				if !strings.HasPrefix(err.Error(), "invalid log rotation config: ") {
+					t.Errorf("test %q, expected the invalid log rotation config prefix, got: %+v", tt.name, err)
+				}
+				var typeErr *json.UnmarshalTypeError
+				if !errors.As(err, &typeErr) {
+					t.Errorf("test %q, expected a wrapped *json.UnmarshalTypeError, got: %+v", tt.name, err)
+				} else if typeErr.Value != "bool" || typeErr.Type != reflect.TypeFor[int]() {
+					t.Errorf("test %q, expected a bool value for an int field, got value %q for type %v", tt.name, typeErr.Value, typeErr.Type)
+				}
+			}
+			if err != nil && tt.wantErr && !tt.wantTypeError && tt.wantErrMsg.Error() != err.Error() {
 				t.Errorf("test %q, expected error: %+v, got: %+v", tt.name, tt.wantErrMsg, err)
 			}
 			if err == nil && tt.wantErr {
