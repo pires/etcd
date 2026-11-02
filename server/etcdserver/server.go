@@ -261,7 +261,7 @@ type EtcdServer struct {
 	// compactor is used to auto-compact the KV.
 	compactor v3compactor.Compactor
 
-	// peerRt used to send requests (version, lease) to peers.
+	// peerRt used to send requests (version, hash, lease, promotion) to peers.
 	peerRt   http.RoundTripper
 	reqIDGen *idutil.Generator
 
@@ -961,6 +961,26 @@ func (s *EtcdServer) Cleanup() {
 	if s.compactor != nil {
 		s.compactor.Stop()
 	}
+	// peerRt is this server's own connection pool to its peers, used for the
+	// version, hash, lease and promotion requests it sends them. The pool has no
+	// idle timeout, so without this its idle connections outlive the server
+	// until each peer closes them. Connections that become idle after this call
+	// are closed too, until a new request reuses the pool.
+	//
+	// No new request can: on a started server, run calls Cleanup only after
+	// s.wg.Wait, which joins every GoAttach monitor and every request that
+	// AttachCall admitted (the lease and promotion forwards), and AttachCall
+	// admits nothing once stopping is closed. A server that never started
+	// sent nothing through peerRt but the corruption check, which returned
+	// before its Cleanup.
+	closeIdleConnections(s.peerRt)
+}
+
+// closeIdleConnections closes the idle connections of rt when rt pools them.
+func closeIdleConnections(rt http.RoundTripper) {
+	if c, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 func (s *EtcdServer) Defragment() error {
@@ -1469,7 +1489,14 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 		return resp, err
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, s.Cfg.ReqTimeout())
+	// The forward sends through peerRt, which shutdown closes, so it runs as a
+	// call shutdown waits for, on a context shutdown cancels.
+	actx, detach, err := s.AttachCall(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer detach()
+	cctx, cancel := context.WithTimeout(actx, s.Cfg.ReqTimeout())
 	defer cancel()
 	// forward to leader
 	for cctx.Err() == nil {
@@ -1489,6 +1516,9 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 		}
 	}
 
+	if errorspkg.Is(context.Cause(cctx), errors.ErrStopped) {
+		return nil, errors.ErrStopped
+	}
 	if errorspkg.Is(cctx.Err(), context.DeadlineExceeded) {
 		return nil, errors.ErrTimeout
 	}
