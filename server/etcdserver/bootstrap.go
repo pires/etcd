@@ -73,6 +73,21 @@ func bootstrap(cfg config.ServerConfig) (b *bootstrappedServer, err error) {
 	if err != nil {
 		return nil, err
 	}
+	return bootstrapWithPeerRoundTripper(cfg, ss, prt)
+}
+
+// bootstrapWithPeerRoundTripper bootstraps the server around prt, the round
+// tripper it sends its peer requests through, and owns prt until it returns.
+// Bootstrapping an existing cluster dials its peers through prt, so a
+// bootstrap that fails closes prt's idle connections: it hands prt to nobody.
+// On success prt passes to the returned bootstrappedServer, whose Close closes
+// it in turn.
+func bootstrapWithPeerRoundTripper(cfg config.ServerConfig, ss *snap.Snapshotter, prt http.RoundTripper) (b *bootstrappedServer, err error) {
+	defer func() {
+		if err != nil {
+			closeIdleConnections(prt)
+		}
+	}()
 
 	haveWAL := wal.Exist(cfg.WALDir())
 	backend, err := bootstrapBackend(cfg, haveWAL)
@@ -158,6 +173,7 @@ type bootstrappedServer struct {
 
 func (s *bootstrappedServer) Close() {
 	s.storage.Close()
+	closeIdleConnections(s.prt)
 }
 
 type bootstrappedStorage struct {

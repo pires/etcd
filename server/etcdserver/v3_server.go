@@ -535,7 +535,14 @@ func (s *EtcdServer) LeaseRenew(ctx context.Context, id lease.LeaseID) (int64, e
 		}
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, s.Cfg.ReqTimeout())
+	// The forward sends through peerRt, which shutdown closes, so it runs as a
+	// call shutdown waits for, on a context shutdown cancels.
+	actx, detach, aerr := s.AttachCall(ctx)
+	if aerr != nil {
+		return -1, aerr
+	}
+	defer detach()
+	cctx, cancel := context.WithTimeout(actx, s.Cfg.ReqTimeout())
 	defer cancel()
 
 	// renewals don't go through raft; forward to leader manually
@@ -562,6 +569,8 @@ func (s *EtcdServer) LeaseRenew(ctx context.Context, id lease.LeaseID) (int64, e
 
 	err := cctx.Err()
 	switch {
+	case errorspkg.Is(context.Cause(cctx), errors.ErrStopped):
+		return -1, errors.ErrStopped
 	case errorspkg.Is(err, context.DeadlineExceeded):
 		return -1, errors.ErrTimeout
 	case errorspkg.Is(err, context.Canceled):
@@ -669,7 +678,14 @@ func (s *EtcdServer) leaseTimeToLive(ctx context.Context, r *pb.LeaseTimeToLiveR
 		return resp, nil
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, s.Cfg.ReqTimeout())
+	// The forward sends through peerRt, which shutdown closes, so it runs as a
+	// call shutdown waits for, on a context shutdown cancels.
+	actx, detach, err := s.AttachCall(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer detach()
+	cctx, cancel := context.WithTimeout(actx, s.Cfg.ReqTimeout())
 	defer cancel()
 
 	// forward to leader
@@ -690,6 +706,9 @@ func (s *EtcdServer) leaseTimeToLive(ctx context.Context, r *pb.LeaseTimeToLiveR
 		}
 	}
 
+	if errorspkg.Is(context.Cause(cctx), errors.ErrStopped) {
+		return nil, errors.ErrStopped
+	}
 	if errorspkg.Is(cctx.Err(), context.DeadlineExceeded) {
 		return nil, errors.ErrTimeout
 	}
@@ -793,6 +812,11 @@ func (s *EtcdServer) waitLeader(ctx context.Context) (*membership.Member, error)
 		case <-s.stopping:
 			return nil, errors.ErrStopped
 		case <-ctx.Done():
+			// Shutdown cancels a forward's context as it closes stopping, so
+			// this case can win the race with the one above.
+			if errorspkg.Is(context.Cause(ctx), errors.ErrStopped) {
+				return nil, errors.ErrStopped
+			}
 			return nil, errors.ErrNoLeader
 		}
 	}
