@@ -816,7 +816,20 @@ func (e *Etcd) grpcGatewayDial(splitHTTP bool) (grpcDial func(ctx context.Contex
 		addr = fmt.Sprintf("%s:%s", network, addr)
 	}
 	opts := []grpc.DialOption{grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(math.MaxInt32))}
-	if sctx.secure {
+	if sctx.secure && e.cfg.ClientTLSInfo.HasCredentialSource() {
+		// A credential source dials as a client: its own certificate, its own
+		// verifier deciding the local server in the server direction, and the
+		// explicit ServerName (validation refuses an empty one, so gRPC never
+		// derives a name from the dialled address). The local-trust override
+		// below is not applied: the verifier is the trust decision.
+		tlscfg, tlsErr := e.cfg.ClientTLSInfo.ClientConfig()
+		if tlsErr != nil {
+			return func(ctx context.Context) (*grpc.ClientConn, error) {
+				return nil, tlsErr
+			}
+		}
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTransportCredential(tlscfg)))
+	} else if sctx.secure {
 		tlscfg, tlsErr := e.cfg.ClientTLSInfo.ServerConfig()
 		if tlsErr != nil {
 			return func(ctx context.Context) (*grpc.ClientConn, error) {

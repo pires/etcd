@@ -190,6 +190,14 @@ type TLSInfo struct {
 	// unless callers explicitly opt into live trust-root lookup via the setter.
 	dynamicTrustRoots CertPoolProvider
 
+	// credentials, when set by SetCredentialSource, replaces every certificate
+	// file with an in-memory source and the chain check with a verifier.
+	credentials *credentialBinding
+
+	// CurvePreferences, when non-empty, is passed through to a credential-source
+	// endpoint's tls.Config.
+	CurvePreferences []tls.CurveID
+
 	// AllowedCN is a CN which must be provided by a client.
 	//
 	// Deprecated: use AllowedCNs instead.
@@ -221,11 +229,14 @@ type TLSInfo struct {
 }
 
 func (info TLSInfo) String() string {
+	if info.credentials != nil {
+		return fmt.Sprintf("credential-source, client-cert-auth = %v", info.ClientCertAuth)
+	}
 	return fmt.Sprintf("cert = %s, key = %s, client-cert=%s, client-key=%s, trusted-ca = %s, client-cert-auth = %v, crl-file = %s", info.CertFile, info.KeyFile, info.ClientCertFile, info.ClientKeyFile, info.TrustedCAFile, info.ClientCertAuth, info.CRLFile)
 }
 
 func (info TLSInfo) Empty() bool {
-	return info.CertFile == "" && info.KeyFile == ""
+	return info.credentials == nil && info.CertFile == "" && info.KeyFile == ""
 }
 
 // SetDynamicTrustRoots installs a live trust-root source for future handshakes.
@@ -667,6 +678,9 @@ func (info TLSInfo) cafiles() []string {
 
 // ServerConfig generates a tls.Config object for use by an HTTP server.
 func (info TLSInfo) ServerConfig() (*tls.Config, error) {
+	if info.credentials != nil {
+		return info.credentialServerConfig()
+	}
 	cfg, err := info.baseConfig()
 	if err != nil {
 		return nil, err
@@ -703,6 +717,9 @@ func (info TLSInfo) ServerConfig() (*tls.Config, error) {
 
 // ClientConfig generates a tls.Config object for use by an HTTP client.
 func (info TLSInfo) ClientConfig() (*tls.Config, error) {
+	if info.credentials != nil {
+		return info.credentialClientConfig()
+	}
 	var cfg *tls.Config
 	var err error
 

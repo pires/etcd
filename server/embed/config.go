@@ -943,6 +943,9 @@ func (cfg *Config) Validate() error {
 	if err := cfg.setupLogging(); err != nil {
 		return err
 	}
+	if err := cfg.validateCredentialSources(); err != nil {
+		return err
+	}
 	if err := checkBindURLs(cfg.ListenPeerUrls); err != nil {
 		return err
 	}
@@ -1399,4 +1402,28 @@ func parseBackendFreelistType(freelistType string) bolt.FreelistType {
 	}
 
 	return bolt.FreelistMapType
+}
+
+// validateCredentialSources refuses a client or peer TLSInfo that combines a
+// credential source with a certificate file, generated certificates or
+// another verification mechanism. With the gRPC gateway enabled, a client
+// credential source must name an explicit ServerName: the gateway's self-dial
+// presents it, and gRPC would otherwise derive one from the dialled address.
+func (cfg *Config) validateCredentialSources() error {
+	if err := cfg.ClientTLSInfo.ValidateCredentialSource(); err != nil {
+		return fmt.Errorf("client TLS: %w", err)
+	}
+	if err := cfg.PeerTLSInfo.ValidateCredentialSource(); err != nil {
+		return fmt.Errorf("peer TLS: %w", err)
+	}
+	if cfg.ClientTLSInfo.HasCredentialSource() && cfg.ClientAutoTLS {
+		return fmt.Errorf("client TLS: %w: auto TLS is enabled", transport.ErrCredentialSource)
+	}
+	if cfg.PeerTLSInfo.HasCredentialSource() && cfg.PeerAutoTLS {
+		return fmt.Errorf("peer TLS: %w: peer auto TLS is enabled", transport.ErrCredentialSource)
+	}
+	if cfg.ClientTLSInfo.HasCredentialSource() && cfg.EnableGRPCGateway && cfg.ClientTLSInfo.ServerName == "" {
+		return fmt.Errorf("client TLS: %w: the gRPC gateway needs an explicit ServerName", transport.ErrCredentialSource)
+	}
+	return nil
 }
